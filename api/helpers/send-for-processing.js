@@ -26,7 +26,7 @@ module.exports = {
   fn: async function (inputs, exits) {
     try {
       // await axios.post('https://example.com/send-for-processing', inputs.row);
-      console.log("sned-data")
+      console.log("send-data")
 
       return exits.success();
     } catch (error) {

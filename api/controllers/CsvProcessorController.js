@@ -1,81 +1,126 @@
 // api/controllers/CsvProcessorController.js
-const csv = require('csv-parser');
-const fs = require('fs');
-const path = require('path');
-const { createObjectCsvWriter } = require('csv-writer');
+const csv = require("csv-parser");
+const fs = require("fs");
+const path = require("path");
 
 module.exports = {
-  uploadAndProcessCsv: async function (req, res) {
-    // Handle file upload
-    req.file('csvFile').upload({
-      // Set a temporary upload directory
-      dirname: path.resolve(sails.config.appPath, 'assets/uploads')
-    }, async function (err, uploadedFiles) {
-      if (err) {
-        return res.serverError(err);
-      }
-      
-      if (uploadedFiles.length === 0) {
-        return res.badRequest('No file was uploaded');
-      }
+  fileStatus: async function (req, res) {
+    try {
+      let uniqueId = req.query.uniqueId;
+      let csvFile = (await CSVFile.find({ uniqueId: uniqueId }))[0];
 
-      const csvFilePath = uploadedFiles[0].fd;
-      
-      // Read and process CSV file
-      const rows = [];
-      const processedRows = [];
-      
-      fs.createReadStream(csvFilePath)
-        .pipe(csv())
-        .on('data', (row) => {
-          rows.push(row);
-        })
-        .on('end', async () => {
-          try {
-            for (const row of rows) {
-              const processedRow = await processRow(row);
-              processedRows.push(processedRow);
-            }
-            
-            // Write the processed data to a new CSV file
-            const processedCsvPath = path.resolve(sails.config.appPath, 'assets/uploads/processed_data.csv');
-            await writeProcessedDataToCsv(processedRows, processedCsvPath);
-            
-            return res.ok({ message: 'CSV processed successfully', processedFilePath: processedCsvPath });
-          } catch (error) {
-            return res.serverError(error);
-          }
+      if (csvFile.isUploaded == false || csvFile.isProcressed == false)
+        return res.ok({
+          message: "processing CSV File. File uniqueId " + uniqueId,
         });
-    });
-  }
+
+      return res.ok({
+        message: "CSV processed successfully",
+        processedFilePath: csvFile.processedFilePath,
+      });
+    } catch (err) {
+      return res.badRequest("No file was uploaded");
+    }
+  },
+
+  uploadCsv: async function (req, res) {
+    // Handle file upload
+    req.file("csvFile").upload(
+      {
+        // Set a temporary upload directory
+        dirname: path.resolve(sails.config.appPath, "assets/uploads"),
+      },
+      async function (err, uploadedFiles) {
+        if (err) {
+          return res.serverError(err);
+        }
+
+        if (uploadedFiles.length === 0) {
+          return res.badRequest("No file was uploaded");
+        }
+
+        let uniqueId = uuidv4();
+
+        const processedCsvPath = path.resolve(
+          sails.config.appPath,
+          "assets/uploads/processed_data.csv"
+        );
+
+        procressCSVFile(uniqueId, uploadedFiles);
+
+        await CSVFile.create({
+          uniqueId: uniqueId,
+
+          isUploaded: false,
+
+          isProcressed: false,
+
+          processedFilePath: processedCsvPath,
+        });
+
+        return res.ok({
+          message: "processing CSV File. File uniqueId " + uniqueId,
+        });
+      }
+    );
+  },
 };
 
-async function processRow(row) {
-  // Send row to external API for processing using helper
-  await sails.helpers.sendForProcessing(row);
-
-  // Wait for processing to complete
-  let processingComplete = false;
-  let processedData = null;
-  while (!processingComplete) {
-    const response = await sails.helpers.getData.with({ id: JSON.stringify(row) });
-    if (response.status === 'complete') {
-      processingComplete = true;
-      processedData = response.data;
-    } else {
-      // Wait for some time before polling again
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-
-  return { ...row, ...processedData }; // Merge original row with processed data
+function uuidv4() {
+  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+    (
+      +c^(crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))
+    ).toString(16)
+  );
 }
 
-async function writeProcessedDataToCsv(data, filePath) {
-  const csvWriter = createObjectCsvWriter({
-    path: filePath,
-    header: Object.keys(data[0]).map(key => ({ id: key, title: key }))
+async function procressCSVFile(uniqueId, uploadedFiles) {
+  const csvFilePath = uploadedFiles[0].fd;
+
+  // Read and process CSV file
+  const rows = [];
+  const processedRows = [];
+
+  fs.createReadStream(csvFilePath)
+    .pipe(csv())
+    .on("data", (row) => {
+      try {
+        saveCSVRow(row, uniqueId);
+      } catch (error) {
+        console.log(error);
+      }
+    })
+    .on("end", async () => {
+      await CSVFile.update({ uniqueId: uniqueId }).set({
+        isUploaded: true,
+      });
+    });
+}
+
+async function saveCSVRow(row, uniqueId) {
+  await CSVRow.create({
+    dealerID: row.DealerID,
+
+    fileUniqueId: uniqueId,
+
+    type: row.Type,
+
+    vin: row.VIN,
+
+    year: row.Year,
+
+    stock: row.Stock,
+
+    make: row.Make,
+
+    model: row.Model,
+
+    trim: row.Trim,
+
+    imageList: row.ImageList,
+
+    isProcressed: false,
   });
 
-  await csvWriter.writeRecords(data);
+  await sails.helpers.sendForProcessing(row);
 }
